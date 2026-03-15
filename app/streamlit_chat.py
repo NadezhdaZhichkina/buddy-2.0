@@ -153,7 +153,13 @@ class StreamlitChatService:
         min_score = max(3, scored[0][0] - 2)
         return [item for s, item in scored if s >= min_score][:limit]
 
-    def _answer_with_llm(self, question: str, candidates: list[KnowledgeItem]) -> str | None:
+    def _answer_with_llm(
+        self,
+        question: str,
+        candidates: list[KnowledgeItem],
+        user_role: str | None = None,
+        user_circle: str | None = None,
+    ) -> str | None:
         if not self.llm_enabled:
             return None
 
@@ -162,10 +168,15 @@ class StreamlitChatService:
             facts.append(f"[Факт {idx}] Вопрос: {item.question}\nОтвет: {item.answer}")
         context = "\n\n".join(facts) if facts else "Нет релевантных фактов в базе знаний."
 
+        profile_hint = ""
+        if user_role or user_circle:
+            profile_hint = f" Профиль пользователя: роль={user_role or 'не указана'}, круг={user_circle or 'не указан'}."
+
         system_prompt = (
             "Ты Buddy — дружелюбный помощник по онбордингу в компании PravoTech. "
             "Твоя задача: понять запрос пользователя, выбрать релевантные факты из базы знаний "
             "и дать полезный, живой ответ. Не копируй текст дословно."
+            + profile_hint
         )
         user_prompt = (
             f"Вопрос пользователя: {question}\n\n"
@@ -212,13 +223,13 @@ class StreamlitChatService:
             f"2) {candidates[1].answer}"
         )
 
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, user_role: str | None = None, user_circle: str | None = None) -> str:
         q = (question or "").strip()
         if len(q) < 2:
             return "Напиши вопрос подлиннее, например: «расскажи о компании» или «как оформить отпуск»."
 
         candidates = self._retrieve_candidates(q, limit=8)
-        llm_answer = self._answer_with_llm(q, candidates)
+        llm_answer = self._answer_with_llm(q, candidates, user_role=user_role, user_circle=user_circle)
         if llm_answer:
             return llm_answer
         return self._fallback_answer(candidates)
