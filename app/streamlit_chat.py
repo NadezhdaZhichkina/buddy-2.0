@@ -108,7 +108,8 @@ class StreamlitChatService:
 
         self.openrouter_api_key = (openrouter_api_key or os.getenv("OPENROUTER_API_KEY", "")).strip()
         self.openrouter_model = (openrouter_model or os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1-mini")).strip()
-        self.llm_enabled = bool(self.openrouter_api_key.startswith("sk-"))
+        # Не ограничиваемся префиксом sk-, чтобы не ловить ложный "LLM выключен"
+        self.llm_enabled = bool(self.openrouter_api_key)
 
         self._sync_seed_items()
 
