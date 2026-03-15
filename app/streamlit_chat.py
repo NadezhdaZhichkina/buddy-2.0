@@ -89,22 +89,28 @@ class StreamlitChatService:
         )
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
-        self._seed_if_empty()
+        self._sync_seed_items()
 
-    def _seed_if_empty(self) -> None:
+    def _sync_seed_items(self) -> None:
         with self.SessionLocal() as db:
-            count = db.query(KnowledgeItem).count()
-            if count > 0:
-                return
+            existing = {row.question: row for row in db.query(KnowledgeItem).all()}
+            changed = False
             for item in _extract_seed_items():
-                db.add(
-                    KnowledgeItem(
-                        question=item.get("question", ""),
-                        answer=item.get("answer", ""),
-                        tags=item.get("tags"),
-                    )
-                )
-            db.commit()
+                q = item.get("question", "")
+                a = item.get("answer", "")
+                t = item.get("tags")
+                row = existing.get(q)
+                if row is None:
+                    db.add(KnowledgeItem(question=q, answer=a, tags=t))
+                    changed = True
+                elif row.answer != a or row.tags != t:
+                    row.answer = a
+                    row.tags = t
+                    changed = True
+            if changed:
+                db.commit()
+            else:
+                db.rollback()
 
     def answer(self, question: str) -> str:
         q = (question or "").strip()
