@@ -286,6 +286,13 @@ def _get_streamlit_db_url() -> str:
     if url and isinstance(url, str) and ("postgresql" in url or "postgres" in url):
         if url.startswith("postgres://"):
             url = "postgresql://" + url[10:]
+        # Supabase: порт 5432 даёт "Cannot assign requested address" на Streamlit Cloud — используем pooler 6543
+        if "db." in url and ".supabase.co" in url:
+            m = re.search(r"db\.([a-z0-9]+)\.supabase\.co", url)
+            if m:
+                proj = m.group(1)
+                url = re.sub(r"@db\.[a-z0-9]+\.supabase\.co:\d+", "@aws-0-eu-central-1.pooler.supabase.com:6543", url)
+                url = re.sub(r"://postgres:", f"://postgres.{proj}:", url, count=1)
         if "sslmode" not in url:
             url = url + ("&" if "?" in url else "?") + "sslmode=require"
         try:
