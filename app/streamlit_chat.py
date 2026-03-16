@@ -261,6 +261,46 @@ def _get_streamlit_db_url() -> str:
     return f"sqlite:///{db_path}"
 
 
+def _get_moderator_patch_path() -> Path:
+    """Путь к JSON с ответами модератора (резервное хранилище)."""
+    return Path(__file__).resolve().parent.parent / "knowledge_moderator.json"
+
+
+def _save_to_moderator_patch(question: str, answer: str, tags: str | None = None) -> None:
+    """Дублирует запись модератора в JSON — резерв на случай проблем с БД."""
+    try:
+        path = _get_moderator_patch_path()
+        data = _load_moderator_patch()
+        q, a = (question or "").strip(), (answer or "").strip()
+        if not q or not a:
+            return
+        # Обновить существующий или добавить
+        for i, it in enumerate(data):
+            if isinstance(it, dict) and (it.get("question") or "").strip() == q:
+                data[i] = {"question": q, "answer": a, "tags": (tags or "").strip() or ""}
+                path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+                return
+        data.append({"question": q, "answer": a, "tags": (tags or "").strip() or ""})
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_moderator_patch() -> list[dict]:
+    """Загружает дополнения модератора из JSON."""
+    try:
+        path = _get_moderator_patch_path()
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                return [x for x in raw if isinstance(x, dict)]
+            if isinstance(raw, dict) and raw.get("question") and raw.get("answer"):
+                return [raw]
+    except Exception:
+        pass
+    return []
+
+
 def _notify_mattermost_new_ticket(ticket_id: int, question: str, requester: str) -> None:
     """Опционально: отправить уведомление о новом тикете в Mattermost. Если не настроено — ничего не делать."""
     base_url = (os.getenv("MATTERMOST_BASE_URL") or "").strip()
@@ -309,6 +349,7 @@ class StreamlitChatService:
         seed_items = _extract_seed_items()
         if seed_items is None or not isinstance(seed_items, list):
             seed_items = []
+        patch_items = _load_moderator_patch()
         with self.SessionLocal() as db:
             existing = {row.question: row for row in db.query(KnowledgeItem).all()}
             changed = False
@@ -320,6 +361,22 @@ class StreamlitChatService:
                 if row is None:
                     db.add(KnowledgeItem(question=q, answer=a, tags=t))
                     changed = True
+            for it in patch_items:
+                if not isinstance(it, dict):
+                    continue
+                q = (it.get("question") or "").strip()
+                a = (it.get("answer") or "").strip()
+                t = it.get("tags")
+                if not q or not a:
+                    continue
+                row = existing.get(q) or _find_existing_item_by_normalized_question(db, q)
+                if row:
+                    row.answer = a
+                    row.tags = t or row.tags
+                else:
+                    db.add(KnowledgeItem(question=q, answer=a, tags=t))
+                    existing[q] = None
+                changed = True
             if changed:
                 db.commit()
             else:
@@ -399,6 +456,9 @@ class StreamlitChatService:
         if not final_tags:
             final_tags = _auto_tags_from_qa(q, a)
 
+        # Сразу в patch — не потеряем при сбоях БД
+        _save_to_moderator_patch(q, a, final_tags)
+
         with self.SessionLocal() as db:
             existing = (
                 db.query(KnowledgeItem).filter(KnowledgeItem.question == q).first()
@@ -416,7 +476,7 @@ class StreamlitChatService:
             db.add(row)
             db.commit()
             db.refresh(row)
-            return {"action": "created", "id": int(row.id), "tags": row.tags or ""}
+        return {"action": "created", "id": int(row.id), "tags": row.tags or ""}
 
     def list_moderation_tickets(self, include_closed: bool = False) -> list[dict]:
         with self.SessionLocal() as db:
@@ -460,13 +520,16 @@ class StreamlitChatService:
             if not question_text:
                 return None
 
+            # Сначала сохраняем в JSON — гарантия, что не потеряем ответ модератора
+            final_tags = (tags or "").strip() or _auto_tags_from_qa(question_text, final_answer, limit=10)
+            _save_to_moderator_patch(question_text, final_answer, final_tags)
+
             row.draft_answer = None
             row.final_answer = final_answer
             row.status = "sent"
             row.moderator_username = moderator
             row.delivered_to_user = 0
 
-            final_tags = (tags or "").strip() or _auto_tags_from_qa(question_text, final_answer, limit=10)
             existing = (
                 db.query(KnowledgeItem).filter(KnowledgeItem.question == question_text).first()
                 or _find_existing_item_by_normalized_question(db, question_text)
@@ -475,8 +538,7 @@ class StreamlitChatService:
                 existing.question = question_text
                 existing.answer = final_answer
                 existing.tags = final_tags or existing.tags
-                action = "updated"
-                knowledge_id = int(existing.id)
+                action, knowledge_id = "updated", int(existing.id)
             else:
                 kb_row = KnowledgeItem(
                     question=question_text,
@@ -485,30 +547,9 @@ class StreamlitChatService:
                 )
                 db.add(kb_row)
                 db.flush()
-                action = "created"
-                knowledge_id = int(kb_row.id)
+                action, knowledge_id = "created", int(kb_row.id)
 
             db.commit()
-
-        # Гарантия: в новой сессии проверяем, что запись реально в БЗ (и добавляем, если по какой-то причине не дошла).
-        with self.SessionLocal() as db2:
-            verified_row = (
-                db2.query(KnowledgeItem).filter(KnowledgeItem.question == question_text).first()
-                or _find_existing_item_by_normalized_question(db2, question_text)
-            )
-            if not verified_row:
-                verified_row = KnowledgeItem(
-                    question=question_text,
-                    answer=final_answer,
-                    tags=final_tags or "moderator_validated",
-                )
-                db2.add(verified_row)
-                db2.commit()
-                db2.refresh(verified_row)
-                action = "created"
-                knowledge_id = int(verified_row.id)
-            else:
-                knowledge_id = int(verified_row.id)
 
         return {
             "ticket_id": ticket_id_val,
