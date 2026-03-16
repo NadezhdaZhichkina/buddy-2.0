@@ -678,6 +678,7 @@ def _next_step_response(profile: dict, next_task: dict | None) -> str:
     )
 
 
+# ========== ПАНЕЛЬ РОЛЕЙ — ПЕРВОЕ, ЧТО ВИДИТ ПОЛЬЗОВАТЕЛЬ ==========
 # Инициализация session state до панели ролей
 if "chat_username" not in st.session_state:
     st.session_state.chat_username = "user1"
@@ -686,7 +687,9 @@ if "moderator_username" not in st.session_state:
 if "role_mode" not in st.session_state:
     st.session_state.role_mode = "Пользователь"
 
-# Панель переключения ролей — всегда видна вверху (как на локальном компе)
+# Панель переключения ролей — всегда вверху (Streamlit-чат, как на локальном компе)
+st.markdown("---")
+st.markdown("### 🔀 Режим тестирования — переключение ролей")
 st.subheader("Режим тестирования")
 col1, col2, col3 = st.columns(3)
 with col1:

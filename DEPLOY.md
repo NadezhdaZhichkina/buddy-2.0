@@ -1,5 +1,7 @@
 # Деплой Buddy в Streamlit Cloud
 
+**Важно:** Панель переключения ролей (Пользователь/Модератор, user1/user2) есть только в Streamlit-приложении. FastAPI-чат (`/chat`) — без панели. Чтобы было как на компе, деплой на Streamlit Cloud обязателен.
+
 Чтобы дать ссылку на чат для тестирования, разверни приложение на [Streamlit Community Cloud](https://streamlit.io/cloud) — бесплатный хостинг для Streamlit.
 
 ## Шаг 1: Репозиторий на GitHub
