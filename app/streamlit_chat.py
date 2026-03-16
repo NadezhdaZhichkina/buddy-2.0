@@ -8,6 +8,7 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from sqlalchemy import Column, DateTime, Integer, Text, create_engine, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -255,7 +256,39 @@ def _get_streamlit_db_url() -> str:
         or os.getenv("DATABASE_URL")
         or ""
     ).strip()
-    if url and ("postgresql" in url or "postgres" in url):
+    if not url:
+        try:
+            import streamlit as _st
+            sec = getattr(_st, "secrets", None)
+            if sec is not None:
+                # Прямые ключи
+                v = sec.get("STREAMLIT_DATABASE_URL") or sec.get("DATABASE_URL")
+                if isinstance(v, str) and v.strip():
+                    url = v.strip()
+                elif isinstance(v, dict) and isinstance(v.get("url"), str):
+                    url = (v.get("url") or "").strip()
+                # Streamlit connections: connections.postgres
+                if not url:
+                    conns = sec.get("connections") if isinstance(sec.get("connections"), dict) else None
+                    if conns:
+                        pg = conns.get("postgres") or conns.get("postgresql")
+                        if isinstance(pg, str) and pg.strip():
+                            url = pg.strip()
+                        elif isinstance(pg, dict) and isinstance(pg.get("url"), str):
+                            url = (pg.get("url") or "").strip()
+        except Exception:
+            pass
+        url = (url or "").strip()
+    if url and isinstance(url, str) and ("postgresql" in url or "postgres" in url):
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[10:]
+        if "sslmode" not in url:
+            url = url + ("&" if "?" in url else "?") + "sslmode=require"
+        try:
+            make_url(url)  # валидация — избегаем 'NoneType' object is not iterable
+        except Exception:
+            url = ""
+    if url and isinstance(url, str) and ("postgresql" in url or "postgres" in url):
         return url
     db_path = Path(__file__).resolve().parent.parent / "buddy_streamlit.db"
     return f"sqlite:///{db_path}"
@@ -328,12 +361,16 @@ def _notify_mattermost_new_ticket(ticket_id: int, question: str, requester: str)
 
 
 class StreamlitChatService:
-    def __init__(self, openrouter_api_key: str = "", openrouter_model: str = "openai/gpt-4.1-mini") -> None:
-        db_url = _get_streamlit_db_url()
-        connect_args = {}
+    def __init__(self, openrouter_api_key: str = "", openrouter_model: str = "openai/gpt-4.1-mini", db_url_override: str | None = None) -> None:
+        db_url = (db_url_override or _get_streamlit_db_url()).strip()
+        if not db_url:
+            db_url = f"sqlite:///{Path(__file__).resolve().parent.parent / 'buddy_streamlit.db'}"
+        engine_kw: dict = {"future": True}
         if db_url.startswith("sqlite"):
-            connect_args["check_same_thread"] = False
-        self.engine = create_engine(db_url, connect_args=connect_args or None, future=True)
+            engine_kw["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kw["pool_pre_ping"] = True
+        self.engine = create_engine(db_url, **engine_kw)
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
 
