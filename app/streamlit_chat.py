@@ -247,14 +247,26 @@ def _score(item: KnowledgeItem, query_text: str, terms: list[str]) -> int:
     return score
 
 
+def _get_streamlit_db_url() -> str:
+    """БД для Streamlit: STREAMLIT_DATABASE_URL для постоянного хранения на Cloud, иначе локальный SQLite."""
+    url = (
+        os.getenv("STREAMLIT_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or ""
+    ).strip()
+    if url and ("postgresql" in url or "postgres" in url):
+        return url
+    db_path = Path(__file__).resolve().parent.parent / "buddy_streamlit.db"
+    return f"sqlite:///{db_path}"
+
+
 class StreamlitChatService:
     def __init__(self, openrouter_api_key: str = "", openrouter_model: str = "openai/gpt-4.1-mini") -> None:
-        db_path = Path(__file__).resolve().parent.parent / "buddy_streamlit.db"
-        self.engine = create_engine(
-            f"sqlite:///{db_path}",
-            connect_args={"check_same_thread": False},
-            future=True,
-        )
+        db_url = _get_streamlit_db_url()
+        connect_args = {}
+        if db_url.startswith("sqlite"):
+            connect_args["check_same_thread"] = False
+        self.engine = create_engine(db_url, connect_args=connect_args or None, future=True)
         Base.metadata.create_all(bind=self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, future=True)
 
@@ -420,7 +432,7 @@ class StreamlitChatService:
             row.moderator_username = moderator
             row.delivered_to_user = 0
 
-            final_tags = (tags or "").strip() or _auto_tags_from_qa(row.question, final_answer)
+            final_tags = (tags or "").strip() or _auto_tags_from_qa(row.question, final_answer, limit=10)
             existing = (
                 db.query(KnowledgeItem).filter(KnowledgeItem.question == row.question).first()
                 or _find_existing_item_by_normalized_question(db, row.question)
@@ -445,30 +457,36 @@ class StreamlitChatService:
 
             db.commit()
 
-            # Гарантия обучения: после отправки обязательно проверяем, что пара вопрос-ответ есть в БЗ.
+        # Гарантия обучения: проверяем в новой сессии, что пара вопрос-ответ реально в БЗ.
+        ticket_id_val = int(row.id)
+        question_text = row.question
+        with self.SessionLocal() as db2:
             verified_row = (
-                db.query(KnowledgeItem).filter(KnowledgeItem.question == row.question).first()
-                or _find_existing_item_by_normalized_question(db, row.question)
+                db2.query(KnowledgeItem).filter(KnowledgeItem.question == question_text).first()
+                or _find_existing_item_by_normalized_question(db2, question_text)
             )
             if not verified_row:
                 verified_row = KnowledgeItem(
-                    question=row.question,
+                    question=question_text,
                     answer=final_answer,
                     tags=final_tags or "moderator_validated",
                 )
-                db.add(verified_row)
-                db.commit()
-                db.refresh(verified_row)
+                db2.add(verified_row)
+                db2.commit()
+                db2.refresh(verified_row)
                 action = "created"
                 knowledge_id = int(verified_row.id)
-            return {
-                "ticket_id": int(row.id),
-                "knowledge_action": action,
-                "knowledge_id": knowledge_id,
-                "tags": final_tags,
-                "status": "sent",
-                "knowledge_verified": bool(verified_row),
-            }
+            else:
+                knowledge_id = int(verified_row.id)
+
+        return {
+            "ticket_id": int(row.id),
+            "knowledge_action": action,
+            "knowledge_id": knowledge_id,
+            "tags": final_tags,
+            "status": "sent",
+            "knowledge_verified": True,
+        }
 
     def save_moderator_draft(self, ticket_id: int, draft_answer: str, moderator_username: str) -> bool:
         draft = (draft_answer or "").strip()
