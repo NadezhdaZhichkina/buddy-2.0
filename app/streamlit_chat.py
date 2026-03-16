@@ -58,6 +58,7 @@ _SEARCH_ALIASES = {
     "мчат": ["mchat"],
     "mchat": ["mchat", "mattermost"],
     "mattermost": ["mchat", "mattermost"],
+    "кб": ["корпоративная", "база", "знаний"],
 }
 
 # Окончания для простого стемминга (убираем для поиска словоформ)
@@ -279,10 +280,13 @@ class StreamlitChatService:
         self._cleanup_legacy_test_tickets()
 
     def _sync_seed_items(self) -> None:
+        seed_items = _extract_seed_items()
+        if seed_items is None or not isinstance(seed_items, list):
+            seed_items = []
         with self.SessionLocal() as db:
             existing = {row.question: row for row in db.query(KnowledgeItem).all()}
             changed = False
-            for item in _extract_seed_items():
+            for item in seed_items:
                 q = item.get("question", "")
                 a = item.get("answer", "")
                 t = item.get("tags")
@@ -554,11 +558,13 @@ class StreamlitChatService:
     def _retrieve_candidates_with_scores(
         self, question: str, limit: int = 8, history: list[dict] | None = None
     ) -> list[tuple[int, KnowledgeItem]]:
-        # Контекст из истории: последние 2 сообщения помогают найти релевантные записи
-        # (напр. «пришли названия» после «какие каналы» → «каналы» в контексте)
+        # Контекст только из сообщений пользователя — иначе ответы ассистента (Buddy, наставник)
+        # засоряют поиск и возвращаются одни и те же записи на разные вопросы.
         search_text = (question or "").strip()
         if history:
-            for m in history[-2:]:
+            for m in history[-4:]:  # последние 4 сообщения
+                if m.get("role") != "user":
+                    continue
                 content = (m.get("content") or "").strip()
                 if content:
                     search_text += " " + content
