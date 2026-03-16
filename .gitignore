@@ -14,3 +14,9 @@ test_buddy.db
 
 # Release copies (локальные копии v1.0 и buddy-2.0)
 releases/
+
+# IDE, планирование, локальные данные
+.cursor/
+gsd-project/
+knowledge_moderator.json
+.DS_Store
