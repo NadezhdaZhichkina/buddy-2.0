@@ -822,7 +822,7 @@ st.caption(
     "Можем общаться свободно: и по делу, и по-человечески."
 )
 if service.llm_enabled:
-    st.success(f"LLM: включен (OpenRouter, model: {resolved_model})")
+    st.success(f"LLM: включен (OpenRouter, model: {_resolved_model})")
 else:
     st.info("LLM: выключен — ответы только по базе знаний. Добавь OPENROUTER_API_KEY в Secrets Streamlit Cloud.")
 
@@ -830,9 +830,9 @@ with st.expander("Диагностика LLM", expanded=False):
     st.write(
         {
             "llm_enabled": service.llm_enabled,
-            "model": resolved_model,
-            "key_detected": bool(resolved_key),
-            "key_prefix": (resolved_key[:8] + "...") if resolved_key else "",
+            "model": _resolved_model,
+            "key_detected": bool(_resolved_key),
+            "key_prefix": (_resolved_key[:8] + "...") if _resolved_key else "",
         }
     )
 
